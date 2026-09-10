@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>【GM用】王城決戦 リアルタイム作戦管理</title>
+
+  <!-- Firebase SDK (v9 Compat) -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0b0f19; color: #f8fafc; padding: 12px; max-width: 500px; margin: 0 auto; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    h1 { font-size: 1.1rem; color: #c084fc; }
+    .status-badge { font-size: 0.75rem; padding: 4px 8px; border-radius: 12px; background: #065f46; color: #34d399; font-weight: bold; }
+    .map-wrapper { position: relative; width: 100%; aspect-ratio: 1; max-width: 420px; margin: 0 auto 12px; background: #0f172a; border: 2px solid #5b21b6; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.6); }
+    canvas { width: 100%; height: 100%; display: block; }
+    .panel { background: #1e293b; padding: 12px; border-radius: 12px; border: 1px solid #334155; margin-bottom: 12px; }
+    .panel h2 { font-size: 0.85rem; color: #94a3b8; margin-bottom: 8px; border-bottom: 1px solid #334155; padding-bottom: 4px; display: flex; justify-content: space-between; align-items: center; }
+    .gm-panel { background: #2e1065; border-color: #7c3aed; }
+    .gm-panel h2 { color: #c084fc; border-color: #5b21b6; }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+    label { font-size: 0.7rem; color: #94a3b8; display: block; margin-bottom: 2px; font-weight: bold; }
+    select, input { width: 100%; padding: 6px; background: #0f172a; color: #fff; border: 1px solid #475569; border-radius: 6px; font-size: 0.8rem; }
+    .btn { width: 100%; padding: 8px; border-radius: 6px; border: none; font-weight: bold; cursor: pointer; font-size: 0.85rem; }
+    .btn-primary { background: #2563eb; color: white; }
+    .btn-success { background: #16a34a; color: white; }
+    .btn-gm { background: #6d28d9; color: white; }
+    .btn-danger { background: #dc2626; color: white; }
+    .btn-sm { padding: 3px 6px; font-size: 0.7rem; width: auto; }
+    .player-row { display: flex; gap: 4px; align-items: center; margin-bottom: 4px; }
+    .player-row input { flex: 1; padding: 4px 8px; font-size: 0.75rem; }
+    .plan-item { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 6px; margin-bottom: 6px; display: grid; grid-template-columns: 1fr 0.9fr 0.9fr 0.7fr 1.1fr auto; gap: 4px; align-items: center; }
+    .plan-item select, .plan-item input { padding: 4px; font-size: 0.7rem; }
+    .timeline-container { background: #182234; border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+    .lane-title { font-size: 0.75rem; font-weight: bold; color: #cbd5e1; margin-bottom: 4px; display: flex; justify-content: space-between; }
+    .track { position: relative; height: 28px; background: #0f172a; border-radius: 4px; overflow: hidden; margin-bottom: 4px; border: 1px solid #334155; }
+    .bar { position: absolute; height: 100%; top: 0; left: 0; border-radius: 3px 0 0 3px; transition: width 0.1s linear; }
+    .bar.wait { background: linear-gradient(90deg, #475569, #64748b); }
+    .bar.prep { background: linear-gradient(90deg, #d97706, #f59e0b); }
+    .bar.red { background: linear-gradient(90deg, #b91c1c, #ef4444); }
+    .bar.blue { background: linear-gradient(90deg, #1d4ed8, #3b82f6); }
+    .track-text { position: absolute; width: 100%; height: 100%; top: 0; left: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; font-size: 0.75rem; font-weight: bold; color: #f8fafc; text-shadow: 1px 1px 2px rgba(0,0,0,0.8); z-index: 2; pointer-events: none; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>⚙️ 作戦管理パネル（GM配信中）</h1>
+    <div class="status-badge" id="syncStatus">🟢 リアルタイム通信中</div>
+  </header>
+
+  <div class="map-wrapper">
+    <canvas id="mapCanvas" width="800" height="800"></canvas>
+  </div>
+
+  <div class="panel gm-panel">
+    <h2>⚙️ 設定・構成</h2>
+    <div class="form-grid">
+      <div>
+        <label style="color:#ef4444;">🔴 赤陣営 名称</label>
+        <input type="text" id="redTeamNameInput" value="赤陣営" onchange="updateCustomNames(); syncToFirebase();">
+      </div>
+      <div>
+        <label style="color:#3b82f6;">🔵 青陣営 名称</label>
+        <input type="text" id="blueTeamNameInput" value="青陣営" onchange="updateCustomNames(); syncToFirebase();">
+      </div>
+    </div>
+
+    <div style="margin-bottom:12px; background: rgba(0,0,0,0.2); padding:8px; border-radius:8px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <label style="color:#ef4444; margin:0;" id="redPlayerLabel">🔴 赤陣営 プレイヤー都市</label>
+        <button class="btn btn-sm btn-gm" onclick="addPlayer('red')">＋ 都市を追加</button>
+      </div>
+      <div id="redPlayerListContainer"></div>
+    </div>
+
+    <div style="margin-bottom:12px; background: rgba(0,0,0,0.2); padding:8px; border-radius:8px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <label style="color:#3b82f6; margin:0;" id="bluePlayerLabel">🔵 青陣営 プレイヤー都市</label>
+        <button class="btn btn-sm btn-gm" onclick="addPlayer('blue')">＋ 都市を追加</button>
+      </div>
+      <div id="bluePlayerListContainer"></div>
+    </div>
+
+    <details style="margin-bottom:8px;">
+      <summary style="font-size:0.75rem; color:#c084fc; cursor:pointer; font-weight:bold;">🛠 施設名の変更</summary>
+      <div class="form-grid" style="margin-top:6px;">
+        <input type="text" id="name_castle" value="王城" onchange="updateCustomNames(); syncToFirebase();">
+        <input type="text" id="name_top" value="北砲台" onchange="updateCustomNames(); syncToFirebase();">
+        <input type="text" id="name_bottom" value="南砲台" onchange="updateCustomNames(); syncToFirebase();">
+        <input type="text" id="name_left" value="西砲台" onchange="updateCustomNames(); syncToFirebase();">
+        <input type="text" id="name_right" value="東砲台" onchange="updateCustomNames(); syncToFirebase();">
+      </div>
+    </details>
+
+    <div class="form-grid">
+      <div>
+        <label>タイマーコントロール</label>
+        <div style="display:flex; gap:4px;">
+          <button id="btnPause" class="btn btn-gm" onclick="togglePause()">⏸ 停止</button>
+          <button class="btn btn-gm" onclick="resetClock()">🔄 リセット</button>
+        </div>
+      </div>
+      <div>
+        <label>進行速度</label>
+        <div style="display:flex; gap:4px;">
+          <button class="btn btn-gm" onclick="setSpeed(1)">1x</button>
+          <button class="btn btn-gm" onclick="setSpeed(2)">2x</button>
+          <button class="btn btn-gm" onclick="setSpeed(5)">5x</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex; gap:4px; margin-top:6px;">
+      <button class="btn btn-danger" onclick="clearMarches()">🧹 行軍を全クリア</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>
+      <span>📋 作戦一括設定リスト</span>
+      <button class="btn btn-sm btn-primary" onclick="addPlanRow()">＋ 行軍を追加</button>
+    </h2>
+
+    <div style="margin-bottom:8px;">
+      <label>対象陣営</label>
+      <select id="planTeamSelect" onchange="renderPlanList()">
+      </select>
+    </div>
+
+    <div style="display:grid; grid-template-columns: 1fr 0.9fr 0.9fr 0.7fr 1.1fr auto; gap:4px; padding:0 4px 4px 4px; font-size:0.6rem; color:#94a3b8; font-weight:bold;">
+      <div>プレイヤー</div>
+      <div>目標</div>
+      <div>種別</div>
+      <div>行軍(秒)</div>
+      <div>着弾目標時刻</div>
+      <div></div>
+    </div>
+
+    <div id="planListContainer" style="margin-bottom: 10px;"></div>
+
+    <div style="display:flex; gap:6px;">
+      <button class="btn btn-gm" style="flex:1;" onclick="fillDefaultPlan()">⚡ 配置都市を自動入力</button>
+      <button class="btn btn-success" style="flex:2; font-size:0.95rem;" onclick="executeAllPlans()">🚀 作戦配信（全員に同期）</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>⏳ 進行タイムライン</h2>
+    <div id="timelineArea"></div>
+  </div>
+
+  <script>
+    // ★★★ Firebase 設定（プロジェクトID: wos-2205） ★★★
+    const firebaseConfig = {
+      apiKey: "AIzaSyCfTe-X7h0y_vCDdlQLyNAfvnbjk-BWOEE",
+      authDomain: "wos-2205.firebaseapp.com",
+      databaseURL: "https://wos-2205-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "wos-2205",
+      storageBucket: "wos-2205.firebasestorage.app",
+      messagingSenderId: "1037368490521",
+      appId: "1:1037368490521:web:1046d913edf1cb7fbe0888",
+      measurementId: "G-LJ4DTXCKEN"
+    };
+    
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const stateRef = db.ref('svs_sim_state');
+
+    const DPRO = 2;
+    const canvas = document.getElementById('mapCanvas');
+    const ctx = canvas.getContext('2d');
+    const WIDTH = canvas.width, HEIGHT = canvas.height;
+    const CX = WIDTH / 2, CY = HEIGHT / 2;
+    const DIAMOND_RADIUS = 150 * DPRO;
+
+    const TARGETS = {
+      castle:        { x: CX, y: CY, name: '王城' },
+      turret_top:    { x: CX, y: CY - DIAMOND_RADIUS, name: '北砲台' },
+      turret_bottom: { x: CX, y: CY + DIAMOND_RADIUS, name: '南砲台' },
+      turret_left:   { x: CX - DIAMOND_RADIUS, y: CY, name: '西砲台' },
+      turret_right:  { x: CX + DIAMOND_RADIUS, y: CY, name: '東砲台' }
+    };
+
+    let redTeamName = '赤陣営';
+    let blueTeamName = '青陣営';
+    let redPlayers = [];
+    let bluePlayers = [];
+    let isPaused = false;
+    let speed = 1;
+    let virtualTime = 0;
+    let lastRealTime = Date.now();
+    let marches = [];
+    let plannedRows = [];
+    let cities = { reds: [], blues: [], size: 10 * DPRO };
+
+    function syncToFirebase() {
+      stateRef.set({
+        redTeamName,
+        blueTeamName,
+        redPlayers,
+        bluePlayers,
+        targetNames: {
+          castle: TARGETS.castle.name,
+          top: TARGETS.turret_top.name,
+          bottom: TARGETS.turret_bottom.name,
+          left: TARGETS.turret_left.name,
+          right: TARGETS.turret_right.name
+        },
+        marches,
+        virtualTime,
+        isPaused,
+        updatedAt: Date.now()
+      });
+    }
+
+    function parseTimeStringToSeconds(timeStr) {
+      if (!timeStr) return 300;
+      const parts = timeStr.trim().split(':').map(Number);
+      if (parts.some(isNaN)) return 300;
+      if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+      if (parts.length === 2) return parts[0] * 60 + parts[1];
+      if (parts.length === 1) return parts[0];
+      return 300;
+    }
+
+    function addPlayer(team) {
+      if (team === 'red') redPlayers.push(`赤${redPlayers.length + 1}`);
+      else bluePlayers.push(`青${bluePlayers.length + 1}`);
+      onPlayersUpdated();
+      syncToFirebase();
+    }
+
+    function removePlayer(team, idx) {
+      if (team === 'red') redPlayers.splice(idx, 1);
+      else bluePlayers.splice(idx, 1);
+      onPlayersUpdated();
+      syncToFirebase();
+    }
+
+    function updatePlayerName(team, idx, val) {
+      if (team === 'red') redPlayers[idx] = val.trim() || `赤${idx + 1}`;
+      else bluePlayers[idx] = val.trim() || `青${idx + 1}`;
+      onPlayersUpdated(false);
+      syncToFirebase();
+    }
+
+    function renderPlayerListControls() {
+      const redContainer = document.getElementById('redPlayerListContainer');
+      const blueContainer = document.getElementById('bluePlayerListContainer');
+
+      redContainer.innerHTML = redPlayers.length === 0 ? '<div style="font-size:0.7rem; color:#64748b;">都市がありません。</div>' : '';
+      redPlayers.forEach((p, idx) => {
+        const div = document.createElement('div');
+        div.className = 'player-row';
+        div.innerHTML = `<input type="text" value="${p}" onchange="updatePlayerName('red', ${idx}, this.value)"><button class="btn btn-sm btn-danger" onclick="removePlayer('red', ${idx})">🗑</button>`;
+        redContainer.appendChild(div);
+      });
+
+      blueContainer.innerHTML = bluePlayers.length === 0 ? '<div style="font-size:0.7rem; color:#64748b;">都市がありません。</div>' : '';
+      bluePlayers.forEach((p, idx) => {
+        const div = document.createElement('div');
+        div.className = 'player-row';
+        div.innerHTML = `<input type="text" value="${p}" onchange="updatePlayerName('blue', ${idx}, this.value)"><button class="btn btn-sm btn-danger" onclick="removePlayer('blue', ${idx})">🗑</button>`;
+        blueContainer.appendChild(div);
+      });
+    }
+
+    function onPlayersUpdated(reRenderList = true) {
+      rebuildCities();
+      if (reRenderList) renderPlayerListControls();
+      refreshSelects();
+    }
+
+    function rebuildCities() {
+      const CITIES_PER_ROW = 10;
+      const baseOffset = 25 * DPRO;
+      const rowSpacing = 22 * DPRO;
+
+      const generateGridPoints = (edgeList, playersList) => {
+        const points = [];
+        for (let idx = 0; idx < playersList.length; idx++) {
+          const rowIndex = Math.floor(idx / CITIES_PER_ROW);
+          const colIndex = idx % CITIES_PER_ROW;
+          const edgeIdx = colIndex < 5 ? 0 : 1;
+          const posOnEdge = colIndex % 5;
+          const [p1, p2] = edgeList[edgeIdx];
+          const dx = p2.x - p1.x, dy = p2.y - p1.y;
+          let nx = -dy, ny = dx;
+          const midX = (p1.x + p2.x) / 2, midY = (p1.y + p2.y) / 2;
+          if ((midX - CX) * nx + (midY - CY) * ny < 0) { nx = -nx; ny = -ny; }
+          const len = Math.hypot(nx, ny);
+          const currentOffset = baseOffset + (rowIndex * rowSpacing);
+          const ux = (nx / len) * currentOffset;
+          const uy = (ny / len) * currentOffset;
+          const t = (posOnEdge + 1) / 6;
+          points.push({ x: p1.x + dx * t + ux, y: p1.y + dy * t + uy });
+        }
+        return points;
+      };
+
+      cities.reds = generateGridPoints([[TARGETS.turret_left, TARGETS.turret_top], [TARGETS.turret_bottom, TARGETS.turret_left]], redPlayers);
+      cities.blues = generateGridPoints([[TARGETS.turret_top, TARGETS.turret_right], [TARGETS.turret_right, TARGETS.turret_bottom]], bluePlayers);
+    }
+
+    function updateCustomNames() {
+      redTeamName = document.getElementById('redTeamNameInput').value || '赤陣営';
+      blueTeamName = document.getElementById('blueTeamNameInput').value || '青陣営';
+      document.getElementById('redPlayerLabel').innerText = `🔴 ${redTeamName} プレイヤー都市`;
+      document.getElementById('bluePlayerLabel').innerText = `🔵 ${blueTeamName} プレイヤー都市`;
+      TARGETS.castle.name = document.getElementById('name_castle').value;
+      TARGETS.turret_top.name = document.getElementById('name_top').value;
+      TARGETS.turret_bottom.name = document.getElementById('name_bottom').value;
+      TARGETS.turret_left.name = document.getElementById('name_left').value;
+      TARGETS.turret_right.name = document.getElementById('name_right').value;
+      refreshSelects();
+    }
+
+    function refreshSelects() {
+      const planTeamSel = document.getElementById('planTeamSelect');
+      const curPlanTeam = planTeamSel.value || 'red';
+      planTeamSel.innerHTML = `<option value="red">🔴 ${redTeamName}</option><option value="blue">🔵 ${blueTeamName}</option>`;
+      planTeamSel.value = curPlanTeam;
+      renderPlanList();
+    }
+
+    function addPlanRow(playerIdx = 0, targetKey = 'castle', rallyType = '300', marchSec = 30, targetTimeStr = '00:05:30') {
+      plannedRows.push({ id: 'p_' + Math.random(), playerIdx, targetKey, rallyType, marchSec, targetTimeStr });
+      renderPlanList();
+    }
+
+    function removePlanRow(id) {
+      plannedRows = plannedRows.filter(r => r.id !== id);
+      renderPlanList();
+    }
+
+    function fillDefaultPlan() {
+      const team = document.getElementById('planTeamSelect').value;
+      const list = team === 'red' ? redPlayers : bluePlayers;
+      const targetKeys = Object.keys(TARGETS);
+      if (list.length === 0) return alert('配置された都市がありません。');
+      plannedRows = list.map((_, idx) => ({
+        id: 'p_' + Math.random(), playerIdx: idx, targetKey: targetKeys[idx % targetKeys.length],
+        rallyType: idx % 3 === 0 ? '300' : '0', marchSec: 30, targetTimeStr: '00:05:30'
+      }));
+      renderPlanList();
+    }
+
+    function renderPlanList() {
+      const team = document.getElementById('planTeamSelect').value;
+      const list = team === 'red' ? redPlayers : bluePlayers;
+      const container = document.getElementById('planListContainer');
+      container.innerHTML = '';
+      if (plannedRows.length === 0) {
+        container.innerHTML = `<div style="text-align:center; color:#64748b; font-size:0.75rem; padding:8px;">行軍がありません。</div>`;
+        return;
+      }
+      plannedRows.forEach((row, index) => {
+        const div = document.createElement('div');
+        div.className = 'plan-item';
+        const playerOptions = list.length === 0 ? `<option value="0">都市未配置</option>` : list.map((p, idx) => `<option value="${idx}" ${idx == row.playerIdx ? 'selected' : ''}>${p}</option>`).join('');
+        const targetOptions = Object.keys(TARGETS).map(k => `<option value="${k}" ${k === row.targetKey ? 'selected' : ''}>${TARGETS[k].name}</option>`).join('');
+        div.innerHTML = `
+          <select onchange="plannedRows[${index}].playerIdx = parseInt(this.value, 10)">${playerOptions}</select>
+          <select onchange="plannedRows[${index}].targetKey = this.value">${targetOptions}</select>
+          <select onchange="plannedRows[${index}].rallyType = this.value">
+            <option value="0" ${row.rallyType === '0' ? 'selected' : ''}>🏹 単騎</option>
+            <option value="300" ${row.rallyType === '300' ? 'selected' : ''}>⚔️ 5分集結</option>
+            <option value="600" ${row.rallyType === '600' ? 'selected' : ''}>⚔️ 10分集結</option>
+          </select>
+          <input type="number" min="1" max="999" value="${row.marchSec}" onchange="plannedRows[${index}].marchSec = Math.max(1, parseInt(this.value, 10) || 1)">
+          <input type="text" value="${row.targetTimeStr}" onchange="plannedRows[${index}].targetTimeStr = this.value">
+          <button class="btn btn-sm btn-danger" onclick="removePlanRow('${row.id}')">✕</button>
+        `;
+        container.appendChild(div);
+      });
+    }
+
+    function executeAllPlans() {
+      const team = document.getElementById('planTeamSelect').value;
+      const list = team === 'red' ? redPlayers : bluePlayers;
+      const spawnList = team === 'red' ? cities.reds : cities.blues;
+      if (plannedRows.length === 0 || list.length === 0) return alert('作戦リストまたは都市が空です。');
+
+      plannedRows.forEach(row => {
+        const safeIdx = row.playerIdx < list.length ? row.playerIdx : 0;
+        const playerName = list[safeIdx] || (team === 'red' ? redTeamName : blueTeamName);
+        const startPos = spawnList[safeIdx % spawnList.length];
+        const rallySec = parseInt(row.rallyType, 10);
+        const marchSec = parseInt(row.marchSec, 10) || 30;
+        const targetArrivalSec = parseTimeStringToSeconds(row.targetTimeStr);
+        const marchEndTime = virtualTime + targetArrivalSec;
+        const rallyEndTime = marchEndTime - marchSec;
+        const rallyStartTime = rallyEndTime - rallySec;
+
+        marches.push({
+          id: 'm_' + Math.random(), team, playerName, targetKey: row.targetKey,
+          startPos, rallyDurationSec: rallySec, marchDurationSec: marchSec,
+          targetTimeDisplay: row.targetTimeStr, rallyStartTime, rallyEndTime, marchEndTime
+        });
+      });
+      renderTimeline();
+      syncToFirebase();
+    }
+
+    function togglePause() {
+      isPaused = !isPaused;
+      document.getElementById('btnPause').innerText = isPaused ? '▶ 再開' : '⏸ 停止';
+      syncToFirebase();
+    }
+
+    function resetClock() {
+      virtualTime = 0;
+      syncToFirebase();
+    }
+
+    function setSpeed(s) { speed = s; }
+
+    function clearMarches() {
+      marches = [];
+      renderTimeline();
+      syncToFirebase();
+    }
+
+    function speedupMarch(id, percent) {
+      const m = marches.find(x => x.id === id);
+      if (!m) return;
+      if (virtualTime < m.rallyEndTime) {
+        const remRally = m.rallyEndTime - Math.max(virtualTime, m.rallyStartTime);
+        const cut = remRally * (percent / 100);
+        m.rallyEndTime -= cut; m.marchEndTime -= cut;
+      } else {
+        const remMarch = m.marchEndTime - virtualTime;
+        if (remMarch > 0) m.marchEndTime -= remMarch * (percent / 100);
+      }
+      renderTimeline();
+      syncToFirebase();
+    }
+
+    function deleteMarch(id) {
+      marches = marches.filter(x => x.id !== id);
+      renderTimeline();
+      syncToFirebase();
+    }
+
+    function drawMap() {
+      ctx.clearRect(0, 0, WIDTH, HEIGHT);
+      ctx.strokeStyle = '#334155'; ctx.lineWidth = 3 * DPRO; ctx.beginPath();
+      ctx.moveTo(TARGETS.turret_top.x, TARGETS.turret_top.y);
+      ctx.lineTo(TARGETS.turret_right.x, TARGETS.turret_right.y);
+      ctx.lineTo(TARGETS.turret_bottom.x, TARGETS.turret_bottom.y);
+      ctx.lineTo(TARGETS.turret_left.x, TARGETS.turret_left.y);
+      ctx.closePath(); ctx.stroke();
+
+      ctx.font = `bold ${7 * DPRO}px sans-serif`; ctx.textAlign = 'center';
+
+      cities.reds.forEach((p, idx) => {
+        ctx.fillStyle = '#ef4444'; ctx.fillRect(p.x - cities.size/2, p.y - cities.size/2, cities.size, cities.size);
+        ctx.fillStyle = '#fca5a5'; ctx.fillText(redPlayers[idx] || `${redTeamName}${idx + 1}`, p.x, p.y - cities.size/2 - 3 * DPRO);
+      });
+
+      cities.blues.forEach((p, idx) => {
+        ctx.fillStyle = '#3b82f6'; ctx.fillRect(p.x - cities.size/2, p.y - cities.size/2, cities.size, cities.size);
+        ctx.fillStyle = '#93c5fd'; ctx.fillText(bluePlayers[idx] || `${blueTeamName}${idx + 1}`, p.x, p.y - cities.size/2 - 3 * DPRO);
+      });
+
+      ['turret_top', 'turret_right', 'turret_bottom', 'turret_left'].forEach(k => {
+        const p = TARGETS[k];
+        ctx.fillStyle = '#1e293b'; ctx.beginPath(); ctx.arc(p.x, p.y, 22 * DPRO, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#64748b'; ctx.lineWidth = 4 * DPRO; ctx.stroke();
+        ctx.fillStyle = '#e2e8f0'; ctx.font = `bold ${9*DPRO}px sans-serif`; ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText(p.name, p.x, p.y);
+      });
+
+      const castle = TARGETS.castle;
+      ctx.fillStyle = '#eab308'; ctx.beginPath(); ctx.arc(castle.x, castle.y, 34 * DPRO, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#64748b'; ctx.lineWidth = 5 * DPRO; ctx.stroke();
+      ctx.fillStyle = '#000'; ctx.font = `bold ${10*DPRO}px sans-serif`; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(castle.name, castle.x, castle.y);
+
+      marches.forEach(m => {
+        const target = TARGETS[m.targetKey];
+        if (!m.startPos) return;
+        if (virtualTime < m.rallyStartTime) return;
+        if (virtualTime < m.rallyEndTime) {
+          ctx.fillStyle = '#f59e0b'; ctx.beginPath(); ctx.arc(m.startPos.x, m.startPos.y - 12 * DPRO, 5 * DPRO, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#fbbf24'; ctx.font = `bold ${6 * DPRO}px sans-serif`; ctx.fillText('⚔️集結中', m.startPos.x, m.startPos.y - 19 * DPRO);
+        } else {
+          const elapsed = virtualTime - m.rallyEndTime;
+          const total = m.marchEndTime - m.rallyEndTime;
+          const progress = Math.min(Math.max(elapsed / total, 0), 1);
+          const curX = m.startPos.x + (target.x - m.startPos.x) * progress;
+          const curY = m.startPos.y + (target.y - m.startPos.y) * progress;
+          ctx.strokeStyle = m.team === 'red' ? '#ef4444' : '#3b82f6'; ctx.lineWidth = 3 * DPRO; ctx.beginPath(); ctx.moveTo(m.startPos.x, m.startPos.y); ctx.lineTo(curX, curY); ctx.stroke();
+          ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(curX, curY, 6 * DPRO, 0, Math.PI * 2); ctx.fill();
+        }
+      });
+    }
+
+    function renderTimeline() {
+      const area = document.getElementById('timelineArea');
+      area.innerHTML = '';
+      Object.keys(TARGETS).forEach(key => {
+        const t = TARGETS[key];
+        const targetMarches = marches.filter(m => m.targetKey === key && m.marchEndTime > virtualTime);
+        const container = document.createElement('div');
+        container.className = 'timeline-container';
+        let html = `<div class="lane-title"><span>🏰 ${t.name}</span><span>${targetMarches.length} 件</span></div>`;
+
+        if (targetMarches.length === 0) {
+          html += `<div style="font-size:0.7rem; color:#64748b; text-align:center;">行軍なし</div>`;
+        } else {
+          targetMarches.forEach(m => {
+            let widthPct = 0, statusText = '', barClass = '';
+            if (virtualTime < m.rallyStartTime) {
+              const remWait = Math.ceil(m.rallyStartTime - virtualTime);
+              widthPct = 100; statusText = `⏳ 発起待機 (【${m.targetTimeDisplay}】着弾に向けてあと ${remWait}s 後に発起)`; barClass = 'wait';
+            } else if (virtualTime < m.rallyEndTime) {
+              const totalRally = m.rallyDurationSec || 300;
+              const remaining = Math.max(0, Math.ceil(m.rallyEndTime - virtualTime));
+              widthPct = Math.min(Math.max((1 - remaining / totalRally) * 100, 3), 100); statusText = `⚔️ 集結中 (出発まで ${remaining}s / 目標: ${m.targetTimeDisplay})`; barClass = 'prep';
+            } else {
+              const totalMarch = m.marchEndTime - m.rallyEndTime;
+              const elapsedMarch = virtualTime - m.rallyEndTime;
+              const progress = Math.min(Math.max(elapsedMarch / totalMarch, 0), 1);
+              const remaining = Math.max(0, Math.ceil(m.marchEndTime - virtualTime));
+              widthPct = Math.min(Math.max(progress * 100, 3), 100);
+              statusText = `${m.rallyDurationSec > 0 ? '⚔️ 集結行軍' : '🏹 単騎'} (着弾まで ${remaining}s / 目標: ${m.targetTimeDisplay})`; barClass = m.team;
+            }
+
+            html += `
+              <div class="track">
+                <div class="bar ${barClass}" style="width: ${widthPct}%;"></div>
+                <div class="track-text"><span>${m.playerName}</span><span>${statusText}</span></div>
+              </div>
+              <div style="display:flex; justify-content:flex-end; gap:4px; margin-bottom:4px;">
+                <button class="btn btn-sm btn-gm" onclick="speedupMarch('${m.id}', 25)">⚡25%</button>
+                <button class="btn btn-sm btn-gm" onclick="speedupMarch('${m.id}', 50)">⚡50%</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteMarch('${m.id}')">🗑 削除</button>
+              </div>
+            `;
+          });
+        }
+        container.innerHTML = html;
+        area.appendChild(container);
+      });
+    }
+
+    function loop() {
+      const now = Date.now();
+      const delta = (now - lastRealTime) / 1000;
+      lastRealTime = now;
+      if (!isPaused) virtualTime += delta * speed;
+      marches = marches.filter(m => virtualTime < m.marchEndTime);
+      drawMap(); renderTimeline();
+      requestAnimationFrame(loop);
+    }
+
+    updateCustomNames();
+    onPlayersUpdated();
+    loop();
+  </script>
+</body>
+</html>
