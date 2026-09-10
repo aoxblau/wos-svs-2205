@@ -3,6 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Discord Activity用の CSP 設定 (Firebase通信を許可) -->
+    <meta http-equiv="Content-Security-Policy" content="
+        default-src 'self' https://*.github.io;
+        script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com https://*.firebaseapp.com;
+        style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+        font-src 'self' https://fonts.gstatic.com;
+        connect-src 'self' https://*.firebaseio.com wss://*.firebaseio.com https://*.googleapis.com;
+        img-src 'self' data: https:;
+    ">
   <title>👑 王城決戦 リアルタイム観戦画面</title>
 
   <!-- Firebase SDK (v9 Compat) -->
